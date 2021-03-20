@@ -1,0 +1,31 @@
+<project name="scaler" default="prodn" basedir=".">
+
+   
+   <target name="init">
+   	  <property name="sourceDir" value="."/>
+      <property name="cacheDir" value="${sourceDir}/cache"/>
+      <property name="keyFile" value="${sourceDir}/key.php" />
+      
+   </target>
+
+   <target name="clean" depends="init">
+   	  <delete dir="${cacheDir}" />
+   	  <delete file="${keyFile}"/>
+   </target>
+
+   <target name="prepare" depends="clean">
+      <mkdir dir="${cacheDir}" />
+      <chmod dir="${cacheDir}" perm="777" />
+      
+      <touch file="${keyFile}" />
+      <chmod dir="${keyFile}" perm="777" />
+   </target>
+   
+   
+   <target name="prodn" depends="prepare">
+   
+   </target>
+   
+   
+
+</project>
