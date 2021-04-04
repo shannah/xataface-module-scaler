@@ -78,6 +78,12 @@ class Xataface_Scaler {
 		
 		if ( function_exists('memcache_connect') ){
 			$this->MEMCACHE = new Memcache;
+            if (empty($this->MEMCACHE_HOST)) {
+                $this->MEMCACHE_HOST = 'localhost';
+            }
+            if (empty($this->MEMCACHE_PORT)) {
+                $this->MEMCACHE_PORT = 11211;
+            }
             $res = $this->MEMCACHE->connect($this->MEMCACHE_HOST, $this->MEMCACHE_PORT);
             if (!$res) {
                 throw new Exception("Failed to connect to memcache");

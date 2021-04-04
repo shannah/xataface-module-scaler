@@ -1,0 +1,193 @@
+= Xataface Scaler Module
+
+A module to help Xataface scale to accommodate heavier amounts of traffic using Memcached.
+
+Author Steve Hannah <steve@weblite.ca>
+	
+== Synopsis
+
+This module provides an output cache using https://www.php.net/manual/en/book.memcache.php[PHP Memcache].
+
+== License
+
+MIT
+
+== Requirements
+
+. PHP 7 with net/manual/en/book.memcache.php[PHP Memcache] extension installed.
+. https://www.memcached.org/[Memcached]
+
+== Installation
+
+1. Download the scaler directory and copy it into your application's modules folder.
+2. Include the scaler/cache.php file at the very beginning of your application's index.php file as follows:
++
+[source,php]
+----
+include 'modules/scaler/cache.php';
+----
+3. If you want to have some management actions (such as clearing the cache) you should also
+add the following to the _[_modules]_ section of your _conf.ini_ file.
++
+	modules_scaler=modules/scaler/scaler.php
+	
+
+== How It Works?
+
+On each page load, this will store a cached copy of the page output in memcached.  Each cache entry records the tables that were used to generate its page.  The next time that page is loaded (with the same environment settings) it will check to see if a cached version exists and it will display that cached version as long as the table modification times for all tables referenced by the cache entry are prior to the modification time of the cache entry itself.
+
+== What is Cached?
+
+By default, all content is cached unless any of the following are true:
+
+1. The request type was _POST_
+2. The _-action_ GET parameter is "js" or "css".
+3. The page content is creater than 1 megabyte.
+3. `Dataface_Application::nocache()` was called during the handling of the request.
+
+== Setting Cache Expiry
+
+The default TTL for cached entries is 1 hour.  Override this globally by setting the _$SCALER_PARAMS_ global variable with an _EXPIRES_ property specifying TTL in seconds.
+
+E.g.
+
+[source,php]
+----
+$SCALER_PARAMS = [
+    'EXPIRY' => 1000,
+];
+include 'modules/scaler/cache.php';
+----
+
+NOTE: This global should be set before including the _modules/scaler/cache.php_ file.
+
+=== Setting Cache Expiry Per Request
+
+You can override the cache expiry setting on a per-request basis by calling `Dataface_Application::setCacheExpiry(_seconds_)`
+
+e.g.
+
+[source,php]
+----
+$app = Dataface_Application::getInstance();
+$app->setCacheExpiry(1000);
+  // set expiry on this cache entry to 1000 seconds
+----
+
+=== Purging the Cache
+
+Each cache entry has an associated version hash that is calculated using the application version and  version numbers of each table that was involved in generating the page content.
+
+You can think of the hash string being something like:
+
+----
+sha1(X.Y.Z?table1=VERSION1&table2=VERSION2&...&tablen=VERSIONN)
+----
+
+Where
+
+X::
+The file-system application version (i.e. the version in the version.txt file).  This is sometimes called the _major_ version.
+Y::
+The application content version, which is an incrementing integer stored in the database that keeps track of any changes that should "purge" the cache application-wide.
+Z:: The user application version.  This is an integer stored in the database that can be used to purge the cache application-wide but only for a particular user.
+tableN::
+The name of a table.
+VERSIONN::
+The version of table _N_.  Version numbers are of the form _X.Y_ where _X_ is the global version number of the table, and _Y_ is the user-version number of the table.
+
+We can purge the cache for any particular page, then by incrementing any of the version numbers that are pertinent to a page.  Some examples include:
+
+1. Increment the version number in the _version.txt_ file.  This would purge all cache entries.
+2. Call `Dataface_Application::markCache()` with no-args, as this will increment the application content version (or minor version), and will effectively purge the cache for the entire app.
+3. Call `xf_touch(_$tablename_)` for any table _$tablename_ that was used by the page.  This is automatically called whenever any records are inserted, updated, or deleted using Xataface's standard mechanisms (e.g. anything that uses `Dataface_Record`).  This means that, if you update a record in the "people" table, then all cached pages that used the people table are effectively purged.
+4. Call `Dataface_Application::markCache(_$tablename_, _$username_)` for some user _$username_ to purge all cached pages for that user for the given _$tablename_.
++
+TIP: Either _$tablename_ or _$username_ can be null to purge the cache for _all_ tables, or _all_ users.  Leaving them both _null_ will increment the application content version (i.e. purge cache for the whole app).
+
+== Advanced Usage
+
+=== Tracking Used Tables
+
+By default the tables used in a request are incorporated into the version string for the cache entry of that page. This is a fairly conservative approach as it ensures that the cache will be purged if any changes are made in any of the used tables.  In some cases, you may desire a more aggressive approach where you only invalidate the cache for certain specific tables.
+
+You can override this option at the application level using the conf.ini file, the table level (using the fields.ini file), or the action level (using the actions.ini file).
+
+.Overriding at the application level, in the conf.ini file
+[source,ini]
+----
+[_cache]
+  trackUsedTables=0
+----
+
+.Overriding at the table-level, in the fields.ini file.  This entry should be at the top of the fields.ini file before any field definitions.
+[source,ini]
+----
+scaler.trackUsedTables=0
+----
+
+.Overriding at the action-level in the actions.ini file.  This entry can be added to an action definition to cause it to NOT track the used tables.
+[source,ini]
+----
+scaler.trackUsedTables=0
+----
+
+=== Table Dependencies
+
+Some tables may "depend" on other tables, meaning that their versions should be incremented when any of their dependency table versions are incremented.  For example, if a MySQL view is used, its version number won't be incremented when changes are made to its underlying tables.  In this case we need to tell Xataface that the view "depends" on these tables.  We can do that by adding a _table.depends_ directive to the top of the _fields.ini_ file with a comma-delimited list of the tables that this view depends on.
+
+e.g.
+
+[source,ini]
+----
+table.depends=table1,table2,...,tableN
+----
+
+We can combine the concept of _table dependencies_ with _Tracking used tables_ to achieve more fine-grained control over when the cache for requests on a particular table are purged.
+
+For example, suppose we have a temporary table called __tmp_playlist_ that is formed by joining a _songs_ table with a _playlist_ table - where the _playlist_ table is a _join_ table between _songs_ and the _users_ table.  We might only care if the _join_ table is updated, since this is what dictates what is shown in the list.  In this case we could add the following directives to the __tmp_playlist_ fields.ini file:
+
+[source,ini]
+----
+scaler.trackUsedTables=0
+table.depends=playlist
+----
+
+=== Table Subset Dependencies
+
+Consider the __tmp_playlist_ example from the previous section.  The __tmp_playlist_ table only includes rows from _playlist_ pertaining to the current user.  If we purge the cache whenever a change is made to the _playlist_ table, then when any user adds or removes a song from their playlist, _all_ users will have their cache invalidated.
+
+It would be better if only the user whose playlist has changed has their cache invalidated.  This can be achieved the _playlist_ table has either a _username_ or _userid_ field.  If we mark the username/userid field in that table, then Xataface will track the version on a phantom table called __my_playlist_.  This __my_playlist_ table is not a real table, but it can be referenced by the `table.depends` directive.  It has the special property that its version is managed on a "per-user" basis, based on the userid/username field in the _playlist_ table.
+
+For example, suppose the _playlist_ table has two columns `userid` and `songid`.  The `userid` corresponds with the `userid` of the _users_ table.  Then we can add the `userid=1` directive to the `userid` field in the _playlist_ table's fields.ini file as follows:
+
+[source,ini]
+----
+[userid]
+  userid=1
+----
+
+Then in the fields.ini file for the __tmp_playlist_ table, we would have:
+
+[source,ini]
+----
+table.depends=_my_playlist
+scaler.trackUsedTables=0
+----
+
+Now, cached entries for the __tmp_playlist_ table are invalidated only when records are added, updated, or removed with _userid_ equal to the current user's userid.
+
+**Fields.ini  directives**
+
+userid::
+Adding `userid=1` marks the column as storing a user ID (usually an integer ID corresponding to a record from the _users_ table).
+
+username::
+Adding `username=1` marks the column as storing a username (a string) corresponding to a record from the _users_ table.
+
+
+
+
+
+
+
